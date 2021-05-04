@@ -421,10 +421,7 @@ const installMaybe = () => {
     return Promise.resolve()
   }
 
-  return Promise.all([
-    restoreCachedNpm(),
-    restoreCachedCypressBinary()
-  ]).then(([npmCacheHit]) => {
+  return Promise.all([restoreCachedNpm()]).then(([npmCacheHit]) => {
     core.debug(`npm cache hit ${npmCacheHit}`)
 
     return install().then(() => {
