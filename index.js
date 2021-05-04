@@ -190,6 +190,17 @@ const getInputBool = (name, defaultValue = false) => {
   return defaultValue
 }
 
+const buildAppMaybe = () => {
+  const buildApp = core.getInput('build')
+  if (!buildApp) {
+    return
+  }
+
+  core.debug(`building application using "${buildApp}"`)
+
+  return execCommand(buildApp, true, 'build app')
+}
+
 const startServersMaybe = () => {
   let startCommand
 
@@ -430,6 +441,7 @@ const installMaybe = () => {
 }
 
 installMaybe()
+  .then(buildAppMaybe)
   .then(startServersMaybe)
   .then(waitOnMaybe)
   .then(runTests)
