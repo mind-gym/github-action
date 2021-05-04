@@ -141,7 +141,6 @@ const saveCachedNpm = () => {
 const install = () => {
   // prevent lots of progress messages during install
   core.exportVariable('CI', '1')
-  core.exportVariable('CYPRESS_CACHE_FOLDER', CYPRESS_CACHE_FOLDER)
   // set NPM cache path in case the user has custom install command
   core.exportVariable('npm_config_cache', NPM_CACHE_FOLDER)
 
