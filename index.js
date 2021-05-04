@@ -53,13 +53,6 @@ const execCommand = (
 const isWindows = () => os.platform() === 'win32'
 const isUrl = (s) => /^https?:\/\//.test(s)
 
-/**
- * Returns true if the Cypress binary installation was skipped
- * via an environment variable https://on.cypress.io/installing
- */
-const isCypressBinarySkipped = () =>
-  process.env.CYPRESS_INSTALL_BINARY === '0'
-
 const homeDirectory = os.homedir()
 const platformAndArch = `${process.platform}-${process.arch}`
 
@@ -125,28 +118,6 @@ const getNpmCache = () => {
   return o
 }
 
-// custom Cypress binary cache folder
-// see https://on.cypress.io/caching
-const CYPRESS_CACHE_FOLDER =
-  process.env.CYPRESS_CACHE_FOLDER ||
-  path.join(homeDirectory, '.cache', 'Cypress')
-core.debug(
-  `using custom Cypress cache folder "${CYPRESS_CACHE_FOLDER}"`
-)
-
-const getCypressBinaryCache = () => {
-  const o = {
-    inputPath: CYPRESS_CACHE_FOLDER
-  }
-  const hash = lockHash()
-  const key = `cypress-${platformAndArch}-${hash}`
-
-  // use only exact restore key to prevent cached folder growing in size
-  // https://glebbahmutov.com/blog/do-not-let-cypress-cache-snowball/
-  o.restoreKeys = o.primaryKey = key
-  return o
-}
-
 const restoreCachedNpm = () => {
   core.debug('trying to restore cached NPM modules')
   const NPM_CACHE = getNpmCache()
@@ -165,35 +136,6 @@ const saveCachedNpm = () => {
       console.warn('Saving NPM cache error: %s', e.message)
     }
   )
-}
-
-const restoreCachedCypressBinary = () => {
-  core.debug('trying to restore cached Cypress binary')
-  const CYPRESS_BINARY_CACHE = getCypressBinaryCache()
-  return restoreCache(
-    [CYPRESS_BINARY_CACHE.inputPath],
-    CYPRESS_BINARY_CACHE.primaryKey,
-    [CYPRESS_BINARY_CACHE.restoreKeys]
-  ).catch((e) => {
-    console.warn('Restoring Cypress cache error: %s', e.message)
-  })
-}
-
-const saveCachedCypressBinary = () => {
-  core.debug('saving Cypress binary')
-
-  if (isCypressBinarySkipped()) {
-    core.debug('Skipping Cypress cache save, binary is not installed')
-    return Promise.resolve()
-  }
-
-  const CYPRESS_BINARY_CACHE = getCypressBinaryCache()
-  return saveCache(
-    [CYPRESS_BINARY_CACHE.inputPath],
-    CYPRESS_BINARY_CACHE.primaryKey
-  ).catch((e) => {
-    console.warn('Saving Cypress cache error: %s', e.message)
-  })
 }
 
 const install = () => {
@@ -231,45 +173,6 @@ const install = () => {
   }
 }
 
-const listCypressBinaries = () => {
-  core.debug(
-    `Cypress versions in the cache folder ${CYPRESS_CACHE_FOLDER}`
-  )
-
-  if (isCypressBinarySkipped()) {
-    core.debug('Skipping Cypress cache list, binary is not installed')
-    return Promise.resolve()
-  }
-
-  core.exportVariable('CYPRESS_CACHE_FOLDER', CYPRESS_CACHE_FOLDER)
-  return io.which('npx', true).then((npxPath) => {
-    return exec.exec(
-      quote(npxPath),
-      ['cypress', 'cache', 'list'],
-      cypressCommandOptions
-    )
-  })
-}
-
-const verifyCypressBinary = () => {
-  core.debug(
-    `Verifying Cypress using cache folder ${CYPRESS_CACHE_FOLDER}`
-  )
-  if (isCypressBinarySkipped()) {
-    core.debug('Skipping Cypress verify, binary is not installed')
-    return Promise.resolve()
-  }
-
-  core.exportVariable('CYPRESS_CACHE_FOLDER', CYPRESS_CACHE_FOLDER)
-  return io.which('npx', true).then((npxPath) => {
-    return exec.exec(
-      quote(npxPath),
-      ['cypress', 'verify'],
-      cypressCommandOptions
-    )
-  })
-}
-
 /**
  * Grabs a boolean GitHub Action parameter input and casts it.
  * @param {string} name - parameter name
@@ -286,32 +189,6 @@ const getInputBool = (name, defaultValue = false) => {
   }
 
   return defaultValue
-}
-
-/**
- * Grabs the spec input from the workflow and normalizes
- * it, since sometimes it can be multiline
- * @returns {string|undefined}
- */
-const getSpecsList = () => {
-  const spec = core.getInput('spec')
-  if (!spec) {
-    return
-  }
-  const specLines = spec.split('\n').join(',')
-  core.debug(`extracted spec lines into: "${specLines}"`)
-  return specLines
-}
-
-const buildAppMaybe = () => {
-  const buildApp = core.getInput('build')
-  if (!buildApp) {
-    return
-  }
-
-  core.debug(`building application using "${buildApp}"`)
-
-  return execCommand(buildApp, true, 'build app')
 }
 
 const startServersMaybe = () => {
@@ -472,123 +349,6 @@ const getCiBuildId = async () => {
 }
 
 /**
- * Forms entire command line like "npx cypress run ..."
- */
-const runTestsUsingCommandLine = async () => {
-  core.debug('Running Cypress tests using CLI command')
-  const quoteArgument = isWindows() ? quote : I
-
-  const commandPrefix = core.getInput('command-prefix')
-  if (!commandPrefix) {
-    throw new Error('Expected command prefix')
-  }
-
-  const record = getInputBool('record')
-  const parallel = getInputBool('parallel')
-  const headless = getInputBool('headless')
-
-  // TODO using yarn to run cypress when yarn is used for install
-  // split potentially long command?
-
-  let cmd = []
-  // we need to split the command prefix into individual arguments
-  // otherwise they are passed all as a single string
-  const parts = commandPrefix.split(' ')
-  cmd = cmd.concat(parts)
-  core.debug(`with concatenated command prefix: ${cmd.join(' ')}`)
-
-  // push each CLI argument separately
-  cmd.push('cypress')
-  cmd.push('run')
-  if (headless) {
-    cmd.push('--headless')
-  }
-  if (record) {
-    cmd.push('--record')
-  }
-  if (parallel) {
-    cmd.push('--parallel')
-  }
-  const group = core.getInput('group')
-  if (group) {
-    cmd.push('--group')
-    cmd.push(quoteArgument(group))
-  }
-  const tag = core.getInput('tag')
-  if (tag) {
-    cmd.push('--tag')
-    cmd.push(quoteArgument(tag))
-  }
-  const configInput = core.getInput('config')
-  if (configInput) {
-    cmd.push('--config')
-    cmd.push(quoteArgument(configInput))
-  }
-  const spec = getSpecsList()
-  if (spec) {
-    cmd.push('--spec')
-    cmd.push(quoteArgument(spec))
-  }
-  const project = core.getInput('project')
-  if (project) {
-    cmd.push('--project')
-    cmd.push(quoteArgument(project))
-  }
-  const configFileInput = core.getInput('config-file')
-  if (configFileInput) {
-    cmd.push('--config-file')
-    cmd.push(quoteArgument(configFileInput))
-  }
-
-  if (parallel || group) {
-    const { branch, buildId } = await getCiBuildId()
-    if (branch) {
-      core.exportVariable('GH_BRANCH', branch)
-    }
-
-    cmd.push('--ci-build-id')
-    const ciBuildId = core.getInput('ci-build-id') || buildId
-    cmd.push(quoteArgument(ciBuildId))
-  }
-
-  const browser = core.getInput('browser')
-  if (browser) {
-    cmd.push('--browser')
-    // TODO should browser be quoted?
-    // If it is a path, it might have spaces
-    cmd.push(browser)
-  }
-
-  const envInput = core.getInput('env')
-  if (envInput) {
-    // TODO should env be quoted?
-    // If it is a JSON, it might have spaces
-    cmd.push('--env')
-    cmd.push(envInput)
-  }
-
-  const quiet = getInputBool('quiet')
-  if (quiet) {
-    cmd.push('--quiet')
-  }
-
-  console.log('Cypress test command: npx %s', cmd.join(' '))
-
-  // since we have quoted arguments ourselves, do not double quote them
-  const opts = {
-    ...cypressCommandOptions,
-    windowsVerbatimArguments: false
-  }
-
-  core.debug(`in working directory "${cypressCommandOptions.cwd}"`)
-
-  const npxPath = await io.which('npx', true)
-  core.debug(`npx path: ${npxPath}`)
-
-  return exec.exec(quote(npxPath), cmd, opts)
-}
-
-/**
  * Run Cypress tests by collecting input parameters
  * and using Cypress module API to run tests.
  * @see https://on.cypress.io/module-api
@@ -600,8 +360,6 @@ const runTests = async () => {
     return
   }
 
-  // export common environment variables that help run Cypress
-  core.exportVariable('CYPRESS_CACHE_FOLDER', CYPRESS_CACHE_FOLDER)
   core.exportVariable('TERM', 'xterm')
 
   const customCommand = core.getInput('command')
@@ -615,63 +373,6 @@ const runTests = async () => {
     return runTestsUsingCommandLine()
   }
 
-  core.debug('Running Cypress tests using NPM module API')
-  core.debug(`requiring cypress dependency, cwd is ${process.cwd()}`)
-  core.debug(`working directory ${workingDirectory}`)
-  const cypressModulePath =
-    require.resolve('cypress', {
-      paths: [workingDirectory]
-    }) || 'cypress'
-  core.debug(`resolved cypress ${cypressModulePath}`)
-
-  const cypress = require(cypressModulePath)
-  const cypressOptions = {
-    headless: getInputBool('headless'),
-    record: getInputBool('record'),
-    parallel: getInputBool('parallel'),
-    quiet: getInputBool('quiet')
-  }
-
-  if (core.getInput('group')) {
-    cypressOptions.group = core.getInput('group')
-  }
-  if (core.getInput('tag')) {
-    cypressOptions.tag = core.getInput('tag')
-  }
-  if (core.getInput('config')) {
-    cypressOptions.config = core.getInput('config')
-    core.debug(`Cypress config "${cypressOptions.config}"`)
-  }
-  const spec = getSpecsList()
-  if (spec) {
-    cypressOptions.spec = spec
-  }
-  if (core.getInput('config-file')) {
-    cypressOptions.configFile = core.getInput('config-file')
-  }
-
-  // if the user set the explicit folder, use that
-  if (core.getInput('project')) {
-    cypressOptions.project = core.getInput('project')
-  }
-  if (core.getInput('browser')) {
-    cypressOptions.browser = core.getInput('browser')
-  }
-  if (core.getInput('env')) {
-    cypressOptions.env = core.getInput('env')
-  }
-
-  if (cypressOptions.parallel || cypressOptions.group) {
-    const { branch, buildId } = await getCiBuildId()
-    if (branch) {
-      core.exportVariable('GH_BRANCH', branch)
-    }
-
-    cypressOptions.ciBuildId = core.getInput('ci-build-id') || buildId
-  }
-
-  core.debug(`Cypress options ${JSON.stringify(cypressOptions)}`)
-
   const onTestsFinished = (testResults) => {
     process.chdir(startWorkingDirectory)
 
@@ -679,19 +380,10 @@ const runTests = async () => {
       console.error('Test run failed, code %d', testResults.failures)
       console.error('More information might be available above')
 
-      if (testResults.message) {
-        console.error(
-          'Cypress module has returned the following error message:'
-        )
-        console.error(testResults.message)
-      }
-
       return Promise.reject(
-        new Error(testResults.message || 'Error running Cypress')
+        new Error(testResults.message || 'Error running tests')
       )
     }
-
-    core.debug(`Cypress tests: ${testResults.totalFailed} failed`)
 
     const dashboardUrl = testResults.runUrl
     if (dashboardUrl) {
@@ -704,7 +396,7 @@ const runTests = async () => {
 
     if (testResults.totalFailed) {
       return Promise.reject(
-        new Error(`Cypress tests: ${testResults.totalFailed} failed`)
+        new Error(`tests: ${testResults.totalFailed} failed`)
       )
     }
   }
@@ -732,31 +424,16 @@ const installMaybe = () => {
   return Promise.all([
     restoreCachedNpm(),
     restoreCachedCypressBinary()
-  ]).then(([npmCacheHit, cypressCacheHit]) => {
+  ]).then(([npmCacheHit]) => {
     core.debug(`npm cache hit ${npmCacheHit}`)
-    core.debug(`cypress cache hit ${cypressCacheHit}`)
 
     return install().then(() => {
       core.debug('install has finished')
-      return listCypressBinaries().then(() => {
-        if (npmCacheHit && cypressCacheHit) {
-          core.debug(
-            'no need to verify Cypress binary or save caches'
-          )
-          return Promise.resolve(undefined)
-        }
-
-        core.debug('verifying Cypress binary')
-        return verifyCypressBinary()
-          .then(saveCachedNpm)
-          .then(saveCachedCypressBinary)
-      })
     })
   })
 }
 
 installMaybe()
-  .then(buildAppMaybe)
   .then(startServersMaybe)
   .then(waitOnMaybe)
   .then(runTests)
